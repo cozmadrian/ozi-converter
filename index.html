@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Waypoint Generator - WatchMeFly</title>
+    <!-- Libraries for reading PDF and converting coordinates -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+    <script>pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';</script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/proj4js/2.9.0/proj4.js"></script>
+    <style>
+        body { font-family: Arial, sans-serif; background: #f0f2f5; padding: 20px; color: #333; }
+        .container { max-width: 650px; background: white; padding: 25px; border-radius: 8px; margin: 0 auto; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+        .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-bottom: 20px; }
+        .input-group { display: flex; flex-direction: column; }
+        label { font-weight: bold; margin-bottom: 5px; font-size: 14px; }
+        input, select { padding: 10px; border: 1px solid #ccc; border-radius: 4px; font-size: 14px; }
+        button { background: #28a745; color: white; border: none; padding: 15px; font-size: 16px; border-radius: 5px; cursor: pointer; width: 100%; font-weight: bold; margin-top: 10px;}
+        button:hover { background: #218838; }
+        #log { margin-top: 20px; font-size: 13px; color: #555; white-space: pre-wrap; background: #f8f9fa; padding: 10px; border-radius: 4px; border: 1px solid #ddd;}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h2>UTM (PDF) to OziExplorer Converter</h2>
+        
+        <div class="grid">
+            <div class="input-group">
+                <label>UTM Zone Number (e.g., 33, 34)</label>
+                <input type="number" id="utmZone" value="34">
+            </div>
+            <div class="input-group">
+                <label>Hemisphere</label>
+                <select id="utmHemi">
+                    <option value="N" selected>North (N)</option>
+                    <option value="S">South (S)</option>
+                </select>
+            </div>
+            <div class="input-group">
+                <label>Easting Prefix + Suffix (e.g., 5...0)</label>
+                <input type="text" id="prefixE" value="5" placeholder="Prefix">
+                <input type="text" id="suffixE" value="0" placeholder="Suffix">
+            </div>
+            <div class="input-group">
+                <label>Northing Prefix + Suffix (e.g., 52...0)</label>
+                <input type="text" id="prefixN" value="52" placeholder="Prefix">
+                <input type="text" id="suffixN" value="0" placeholder="Suffix">
+            </div>
+        </div>
+
+        <div class="input-group" style="margin-bottom: 20px;">
+            <label>Select Task Sheet (PDF)</label>
+            <input type="file" id="pdfInput" accept="application/pdf">
+        </div>
+
+        <button onclick="processFiles()">Analyze and Download (.wpt)</button>
+        <div id="log">Waiting for file...</div>
+    </div>
+
+    <script>
+        function logMsg(msg) {
+            document.getElementById('log').textContent += msg + "\n";
+        }
+
+        async function processFiles() {
+            const fileInput = document.getElementById('pdfInput');
+            const logBox = document.getElementById('log');
+            logBox.textContent = ""; 
+
+            if (fileInput.files.length === 0) {
+                logMsg("❌ Error: Please select a PDF file.");
+                return;
+            }
+
+            const zone = document.getElementById('utmZone').value;
+            const hemi = document.getElementById('utmHemi').value;
+            const prefE = document.getElementById('prefixE').value;
+            const suffE = document.getElementById('suffixE').value;
+            const prefN = document.getElementById('prefixN').value;
+            const suffN = document.getElementById('suffixN').value;
+
+            const utmDef = `+proj=utm +zone=${zone} ${hemi === 'S' ? '+south ' : ''}+ellps=WGS84 +datum=WGS84 +units=m +no_defs`;
+            
+            try {
+                logMsg("Reading PDF...");
+                const file = fileInput.files[0];
+                const arrayBuffer = await file.arrayBuffer();
+                const pdf = await pdfjsLib.getDocument(arrayBuffer).promise;
+                let fullText = "";
+
+                for (let i = 1; i <= pdf.numPages; i++) {
+                    const page = await pdf.getPage(i);
+                    const content = await page.getTextContent();
+                    fullText += content.items.map(item => item.str).join(" ") + " ";
+                }
+
+                logMsg("Searching for tasks and coordinates...");
+                
+                const taskRegex = /\b(\d{1,2})\s+([A-Z]{3})\b/g;
+                const coordRegex = /\b(\d{4})\/(\d{4})\b/g;
+
+                let tasksFound = [];
+                let match;
+                while ((match = taskRegex.exec(fullText)) !== null) {
+                    tasksFound.push({ name: `${match[1]}_${match[2]}`, index: match.index });
+                }
+
+                let waypoints = [];
+                let wpCounter = 1;
+
+                while ((match = coordRegex.exec(fullText)) !== null) {
+                    const coordIndex = match.index;
+                    
+                    let currentTaskName = "Target";
+                    let bestTask = tasksFound.reverse().find(t => t.index < coordIndex);
+                    if (bestTask) currentTaskName = bestTask.name;
+                    tasksFound.reverse(); 
+
+                    const rawE = match[1];
+                    const rawN = match[2];
+
+                    const realEasting = parseFloat(`${prefE}${rawE}${suffE}`);
+                    const realNorthing = parseFloat(`${prefN}${rawN}${suffN}`);
+
+                    const [lon, lat] = proj4(utmDef, 'EPSG:4326', [realEasting, realNorthing]);
+
+                    const finalName = `${currentTaskName}_P${wpCounter}`;
+                    waypoints.push(`-1,${finalName},${lat.toFixed(6)},${lon.toFixed(6)},,0,1`);
+                    wpCounter++;
+                }
+
+                if (waypoints.length === 0) {
+                    logMsg("❌ No XXXX/YYYY coordinates found in this document.");
+                    return;
+                }
+
+                const header = "OziExplorer Waypoint File Version 1.1\r\nWGS 84\r\nReserved 1\r\nReserved 2\r\n";
+                const wptContent = header + waypoints.join("\r\n");
+                
+                const blob = new Blob([wptContent], { type: 'text/plain' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `tasks_zone${zone}.wpt`;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+
+                logMsg(`✅ Success: ${waypoints.length} waypoints generated and converted to WGS84.`);
+
+            } catch (err) {
+                logMsg(`❌ Critical Error: ${err.message}`);
+            }
+        }
+    </script>
+</body>
+</html>
