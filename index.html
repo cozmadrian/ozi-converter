@@ -58,6 +58,27 @@
     </div>
 
     <script>
+				// auto execution when loading the page
+		window.onload = function() {
+			const fields = ['utmZone', 'utmHemi', 'prefixE', 'suffixE', 'prefixN', 'suffixN'];
+			
+			fields.forEach(id => {
+				const element = document.getElementById(id);
+				
+				// restore value if exists in memory
+				const savedValue = localStorage.getItem(id);
+				if (savedValue !== null) {
+					element.value = savedValue;
+				}
+				
+				// instant save
+				element.addEventListener('input', function() {
+					localStorage.setItem(id, this.value);
+				});
+			});
+		};
+
+
         function logMsg(msg) {
             document.getElementById('log').textContent += msg + "\n";
         }
