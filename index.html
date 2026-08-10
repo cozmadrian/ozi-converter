@@ -19,7 +19,7 @@
     <style>
         body { font-family: Arial, sans-serif; background: #f0f2f5; padding: 20px; color: #333; margin: 0; }
         .container { max-width: 800px; background: white; padding: 25px; border-radius: 8px; margin: 0 auto; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
-        #map { height: 350px; width: 100%; border-radius: 8px; margin-bottom: 20px; border: 1px solid #ccc; z-index: 1; }
+        #map { height: 400px; width: 100%; border-radius: 8px; margin-bottom: 20px; border: 1px solid #ccc; z-index: 1; }
         .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-bottom: 20px; }
         .input-group { display: flex; flex-direction: column; }
         label { font-weight: bold; margin-bottom: 5px; font-size: 14px; }
@@ -66,7 +66,7 @@
             </div>
         </div>
 
-        <p class="instruction">Step 2: Select the WatchMeFly Task Sheet to generate the file.</p>
+        <p class="instruction">Step 2: Select the WatchMeFly Task Sheet to map targets and generate the file.</p>
 
         <div class="input-group" style="margin-bottom: 20px;">
             <input type="file" id="pdfInput" accept="application/pdf">
@@ -77,9 +77,8 @@
     </div>
 
     <script>
-        let map, marker;
+        let map, referenceMarker, waypointsLayer;
 
-        // Auto-detect UTM Letter based on Latitude
         function getUTMLetter(lat) {
             if (lat < -80 || lat > 84) return 'Z';
             const letters = "CDEFGHJKLMNPQRSTUVWXX";
@@ -87,16 +86,14 @@
             return letters.charAt(index);
         }
 
-        // Visual feedback when inputs are auto-filled
         function highlightInput(id) {
             const el = document.getElementById(id);
             el.classList.add('highlight');
             setTimeout(() => el.classList.remove('highlight'), 1500);
         }
 
-        // Map Initialization
         function initMap() {
-            map = L.map('map').setView([47.2, 15.7], 5); // Default center Europe
+            map = L.map('map').setView([47.2, 15.7], 5); 
             
             L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
                 attribution: '© OpenStreetMap contributors',
@@ -107,22 +104,18 @@
                 const lat = e.latlng.lat;
                 const lng = e.latlng.lng;
 
-                if (marker) map.removeLayer(marker);
-                marker = L.marker([lat, lng]).addTo(map);
+                if (referenceMarker) map.removeLayer(referenceMarker);
+                referenceMarker = L.marker([lat, lng]).addTo(map);
 
-                // Calculate UTM Zone
                 const zone = Math.floor((lng + 180) / 6) + 1;
                 const letter = getUTMLetter(lat);
 
-                // Convert to true UTM to find Easting/Northing
                 const utmDef = `+proj=utm +zone=${zone} ${lat < 0 ? '+south ' : ''}+ellps=WGS84 +datum=WGS84 +units=m +no_defs`;
                 const [easting, northing] = proj4('EPSG:4326', utmDef, [lng, lat]);
 
-                // Calculate prefixes (extract the 100km digits)
                 const prefE = Math.floor(easting / 100000).toString();
                 const prefN = Math.floor(northing / 100000).toString();
 
-                // Update UI
                 document.getElementById('utmZone').value = zone;
                 document.getElementById('utmHemi').value = letter;
                 document.getElementById('prefixE').value = prefE;
@@ -130,18 +123,16 @@
                 document.getElementById('suffixE').value = "0";
                 document.getElementById('suffixN').value = "0";
 
-                // Save to localStorage
                 const fields = ['utmZone', 'utmHemi', 'prefixE', 'suffixE', 'prefixN', 'suffixN'];
                 fields.forEach(id => {
                     localStorage.setItem(id, document.getElementById(id).value);
                     highlightInput(id);
                 });
 
-                logMsg(`📍 Map clicked: Zone ${zone}${letter} detected. Prefixes updated automatically.`);
+                logMsg(`📍 Map clicked: Zone ${zone}${letter} detected. Prefixes updated.`);
             });
         }
 
-        // Automatic restore of input fields
         window.onload = function() {
             initMap();
             
@@ -204,7 +195,15 @@
                 }
 
                 let waypoints = [];
+                let mapMarkers = [];
                 let wpCounter = 1;
+                
+                // Clear previous map points
+                if (waypointsLayer) map.removeLayer(waypointsLayer);
+
+                // Determine hemisphere for proj4 math based on UTM letter (C to M is South)
+                const isSouth = "CDEFGHJKLM".includes(hemi);
+                const proj4UtmDef = `+proj=utm +zone=${zone} ${isSouth ? '+south ' : ''}+ellps=WGS84 +datum=WGS84 +units=m +no_defs`;
 
                 while ((match = coordRegex.exec(fullText)) !== null) {
                     const coordIndex = match.index;
@@ -223,9 +222,15 @@
 
                     const finalName = `${currentTaskName}_P${wpCounter}`;
                     
-                    // OziExplorer Text Import format
+                    // Add to OziExplorer Export Array
                     waypoints.push(`WP,UTM,${finalName},${zoneString},${realEasting},${realNorthing},,,${currentTaskName}`);
                     wpCounter++;
+
+                    // Convert to Lat/Lon to display on the visual map
+                    const [lng, lat] = proj4(proj4UtmDef, 'EPSG:4326', [parseFloat(realEasting), parseFloat(realNorthing)]);
+                    
+                    const marker = L.marker([lat, lng]).bindPopup(`<b>${finalName}</b><br>UTM: ${zoneString} ${realEasting} ${realNorthing}`);
+                    mapMarkers.push(marker);
                 }
 
                 if (waypoints.length === 0) {
@@ -233,6 +238,14 @@
                     return;
                 }
 
+                // Plot markers on the map and auto-zoom to fit them
+                if (mapMarkers.length > 0) {
+                    waypointsLayer = L.featureGroup(mapMarkers).addTo(map);
+                    map.fitBounds(waypointsLayer.getBounds(), { padding: [40, 40] });
+                    logMsg(`🗺️ Map updated: Auto-zoomed to show ${mapMarkers.length} generated targets.`);
+                }
+
+                // File Creation
                 const header = "DATUM,WGS 84\r\n";
                 const txtContent = header + waypoints.join("\r\n");
                 
@@ -241,24 +254,22 @@
                 const a = document.createElement('a');
                 a.href = url;
                 
-                // timestamp
+                // Timestamp generation for file naming
                 const now = new Date();
-				const yyyy = now.getFullYear();
-				const mm = String(now.getMonth() + 1).padStart(2, '0');
-				const dd = String(now.getDate()).padStart(2, '0');
-				const hh = String(now.getHours()).padStart(2, '0');
-				const min = String(now.getMinutes()).padStart(2, '0');
-				const sec = String(now.getSeconds()).padStart(2, '0');
-				const timestamp = `${yyyy}-${mm}-${dd}_${hh}-${min}-${sec}`;
-				
-				// namme modified with current taskzone and timestamp
+                const yyyy = now.getFullYear();
+                const mm = String(now.getMonth() + 1).padStart(2, '0');
+                const dd = String(now.getDate()).padStart(2, '0');
+                const hh = String(now.getHours()).padStart(2, '0');
+                const min = String(now.getMinutes()).padStart(2, '0');
+                const sec = String(now.getSeconds()).padStart(2, '0');
+                const timestamp = `${yyyy}-${mm}-${dd}_${hh}-${min}-${sec}`;
+
                 a.download = `tasks_zone${zone}${hemi}_${timestamp}.txt`;
-                
                 document.body.appendChild(a);
                 a.click();
                 document.body.removeChild(a);
 
-                logMsg(`✅ Success: ${waypoints.length} waypoints generated in OziExplorer text format.`);
+                logMsg(`✅ Success: File [tasks_zone${zone}${hemi}_${timestamp}.txt] generated.`);
                 logMsg(`⚠️ Reminder: In OziExplorer, use "Load" -> "Import Waypoints from Text File"`);
 
             } catch (err) {
