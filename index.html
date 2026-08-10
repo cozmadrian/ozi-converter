@@ -4,80 +4,159 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Waypoint Generator - WatchMeFly</title>
-    <!-- Libraries for reading PDF and converting coordinates -->
+    
+    <!-- PDF Library -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
     <script>pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';</script>
+    
+    <!-- Proj4js for Lat/Lon to UTM calculation -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/proj4js/2.9.0/proj4.js"></script>
+    
+    <!-- Leaflet for OpenStreetMap -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.css" />
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js"></script>
+
     <style>
-        body { font-family: Arial, sans-serif; background: #f0f2f5; padding: 20px; color: #333; }
-        .container { max-width: 650px; background: white; padding: 25px; border-radius: 8px; margin: 0 auto; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+        body { font-family: Arial, sans-serif; background: #f0f2f5; padding: 20px; color: #333; margin: 0; }
+        .container { max-width: 800px; background: white; padding: 25px; border-radius: 8px; margin: 0 auto; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+        #map { height: 350px; width: 100%; border-radius: 8px; margin-bottom: 20px; border: 1px solid #ccc; z-index: 1; }
         .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-bottom: 20px; }
         .input-group { display: flex; flex-direction: column; }
         label { font-weight: bold; margin-bottom: 5px; font-size: 14px; }
-        input, select { padding: 10px; border: 1px solid #ccc; border-radius: 4px; font-size: 14px; }
+        input { padding: 10px; border: 1px solid #ccc; border-radius: 4px; font-size: 14px; }
+        .highlight { border: 2px solid #007bff !important; background-color: #e9f5ff; }
         button { background: #28a745; color: white; border: none; padding: 15px; font-size: 16px; border-radius: 5px; cursor: pointer; width: 100%; font-weight: bold; margin-top: 10px;}
         button:hover { background: #218838; }
         #log { margin-top: 20px; font-size: 13px; color: #555; white-space: pre-wrap; background: #f8f9fa; padding: 10px; border-radius: 4px; border: 1px solid #ddd;}
+        .instruction { font-size: 14px; color: #555; margin-bottom: 15px; font-style: italic; }
     </style>
 </head>
 <body>
     <div class="container">
-        <h2>UTM (PDF) to OziExplorer Converter</h2>
+        <h2>UTM to OziExplorer Converter</h2>
         
+        <p class="instruction">Step 1: Click on the map near the competition area to auto-detect UTM prefixes, or enter them manually.</p>
+        
+        <div id="map"></div>
+
         <div class="grid">
             <div class="input-group">
-                <label>UTM Zone Number (e.g., 33, 34)</label>
+                <label>Zone Number (e.g., 33, 34)</label>
                 <input type="number" id="utmZone" value="34">
             </div>
             <div class="input-group">
-                <label>Hemisphere</label>
-                <select id="utmHemi">
-                    <option value="N" selected>North (N)</option>
-                    <option value="S">South (S)</option>
-                </select>
+                <label>Zone Letter (e.g., T, J)</label>
+                <input type="text" id="utmHemi" value="T" placeholder="UTM Letter">
             </div>
             <div class="input-group">
-                <label>Easting Prefix + Suffix (e.g., 5...0)</label>
+                <label>Easting Prefix</label>
                 <input type="text" id="prefixE" value="5" placeholder="Prefix">
+            </div>
+            <div class="input-group">
+                <label>Easting Suffix</label>
                 <input type="text" id="suffixE" value="0" placeholder="Suffix">
             </div>
             <div class="input-group">
-                <label>Northing Prefix + Suffix (e.g., 52...0)</label>
+                <label>Northing Prefix</label>
                 <input type="text" id="prefixN" value="52" placeholder="Prefix">
+            </div>
+            <div class="input-group">
+                <label>Northing Suffix</label>
                 <input type="text" id="suffixN" value="0" placeholder="Suffix">
             </div>
         </div>
 
+        <p class="instruction">Step 2: Select the WatchMeFly Task Sheet to generate the file.</p>
+
         <div class="input-group" style="margin-bottom: 20px;">
-            <label>Select Task Sheet (PDF)</label>
             <input type="file" id="pdfInput" accept="application/pdf">
         </div>
 
-        <button onclick="processFiles()">Analyze and Download (.wpt)</button>
+        <button onclick="processFiles()">Generate Text File (.txt)</button>
         <div id="log">Waiting for file...</div>
     </div>
 
     <script>
-				// auto execution when loading the page
-		window.onload = function() {
-			const fields = ['utmZone', 'utmHemi', 'prefixE', 'suffixE', 'prefixN', 'suffixN'];
-			
-			fields.forEach(id => {
-				const element = document.getElementById(id);
-				
-				// restore value if exists in memory
-				const savedValue = localStorage.getItem(id);
-				if (savedValue !== null) {
-					element.value = savedValue;
-				}
-				
-				// instant save
-				element.addEventListener('input', function() {
-					localStorage.setItem(id, this.value);
-				});
-			});
-		};
+        let map, marker;
 
+        // Auto-detect UTM Letter based on Latitude
+        function getUTMLetter(lat) {
+            if (lat < -80 || lat > 84) return 'Z';
+            const letters = "CDEFGHJKLMNPQRSTUVWXX";
+            const index = Math.floor((lat + 80) / 8);
+            return letters.charAt(index);
+        }
+
+        // Visual feedback when inputs are auto-filled
+        function highlightInput(id) {
+            const el = document.getElementById(id);
+            el.classList.add('highlight');
+            setTimeout(() => el.classList.remove('highlight'), 1500);
+        }
+
+        // Map Initialization
+        function initMap() {
+            map = L.map('map').setView([47.2, 15.7], 5); // Default center Europe
+            
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                attribution: '© OpenStreetMap contributors',
+                maxZoom: 18
+            }).addTo(map);
+
+            map.on('click', function(e) {
+                const lat = e.latlng.lat;
+                const lng = e.latlng.lng;
+
+                if (marker) map.removeLayer(marker);
+                marker = L.marker([lat, lng]).addTo(map);
+
+                // Calculate UTM Zone
+                const zone = Math.floor((lng + 180) / 6) + 1;
+                const letter = getUTMLetter(lat);
+
+                // Convert to true UTM to find Easting/Northing
+                const utmDef = `+proj=utm +zone=${zone} ${lat < 0 ? '+south ' : ''}+ellps=WGS84 +datum=WGS84 +units=m +no_defs`;
+                const [easting, northing] = proj4('EPSG:4326', utmDef, [lng, lat]);
+
+                // Calculate prefixes (extract the 100km digits)
+                const prefE = Math.floor(easting / 100000).toString();
+                const prefN = Math.floor(northing / 100000).toString();
+
+                // Update UI
+                document.getElementById('utmZone').value = zone;
+                document.getElementById('utmHemi').value = letter;
+                document.getElementById('prefixE').value = prefE;
+                document.getElementById('prefixN').value = prefN;
+                document.getElementById('suffixE').value = "0";
+                document.getElementById('suffixN').value = "0";
+
+                // Save to localStorage
+                const fields = ['utmZone', 'utmHemi', 'prefixE', 'suffixE', 'prefixN', 'suffixN'];
+                fields.forEach(id => {
+                    localStorage.setItem(id, document.getElementById(id).value);
+                    highlightInput(id);
+                });
+
+                logMsg(`📍 Map clicked: Zone ${zone}${letter} detected. Prefixes updated automatically.`);
+            });
+        }
+
+        // Automatic restore of input fields
+        window.onload = function() {
+            initMap();
+            
+            const fields = ['utmZone', 'utmHemi', 'prefixE', 'suffixE', 'prefixN', 'suffixN'];
+            fields.forEach(id => {
+                const element = document.getElementById(id);
+                const savedValue = localStorage.getItem(id);
+                if (savedValue !== null) {
+                    element.value = savedValue;
+                }
+                element.addEventListener('input', function() {
+                    localStorage.setItem(id, this.value);
+                });
+            });
+        };
 
         function logMsg(msg) {
             document.getElementById('log').textContent += msg + "\n";
@@ -94,13 +173,11 @@
             }
 
             const zone = document.getElementById('utmZone').value;
-            const hemi = document.getElementById('utmHemi').value;
+            const hemi = document.getElementById('utmHemi').value.toUpperCase();
             const prefE = document.getElementById('prefixE').value;
             const suffE = document.getElementById('suffixE').value;
             const prefN = document.getElementById('prefixN').value;
             const suffN = document.getElementById('suffixN').value;
-
-            const utmDef = `+proj=utm +zone=${zone} ${hemi === 'S' ? '+south ' : ''}+ellps=WGS84 +datum=WGS84 +units=m +no_defs`;
             
             try {
                 logMsg("Reading PDF...");
@@ -140,34 +217,49 @@
                     const rawE = match[1];
                     const rawN = match[2];
 
-                    const realEasting = parseFloat(`${prefE}${rawE}${suffE}`);
-                    const realNorthing = parseFloat(`${prefN}${rawN}${suffN}`);
-
-                    const [lon, lat] = proj4(utmDef, 'EPSG:4326', [realEasting, realNorthing]);
+                    const realEasting = `${prefE}${rawE}${suffE}`;
+                    const realNorthing = `${prefN}${rawN}${suffN}`;
+                    const zoneString = `${zone}${hemi}`; 
 
                     const finalName = `${currentTaskName}_P${wpCounter}`;
-                    waypoints.push(`-1,${finalName},${lat.toFixed(6)},${lon.toFixed(6)},,0,1`);
+                    
+                    // OziExplorer Text Import format
+                    waypoints.push(`WP,UTM,${finalName},${zoneString},${realEasting},${realNorthing},,,${currentTaskName}`);
                     wpCounter++;
                 }
 
                 if (waypoints.length === 0) {
-                    logMsg("❌ No XXXX/YYYY coordinates found in this document.");
+                    logMsg("❌ Error: No XXXX/YYYY coordinates found in this document.");
                     return;
                 }
 
-                const header = "OziExplorer Waypoint File Version 1.1\r\nWGS 84\r\nReserved 1\r\nReserved 2\r\n";
-                const wptContent = header + waypoints.join("\r\n");
+                const header = "DATUM,WGS 84\r\n";
+                const txtContent = header + waypoints.join("\r\n");
                 
-                const blob = new Blob([wptContent], { type: 'text/plain' });
+                const blob = new Blob([txtContent], { type: 'text/plain' });
                 const url = URL.createObjectURL(blob);
                 const a = document.createElement('a');
                 a.href = url;
-                a.download = `tasks_zone${zone}.wpt`;
+                
+                // timestamp
+                const now = new Date();
+				const yyyy = now.getFullYear();
+				const mm = String(now.getMonth() + 1).padStart(2, '0');
+				const dd = String(now.getDate()).padStart(2, '0');
+				const hh = String(now.getHours()).padStart(2, '0');
+				const min = String(now.getMinutes()).padStart(2, '0');
+				const sec = String(now.getSeconds()).padStart(2, '0');
+				const timestamp = `${yyyy}-${mm}-${dd}_${hh}-${min}-${sec}`;
+				
+				// namme modified with current taskzone and timestamp
+                a.download = `tasks_zone${zone}${hemi}_${timestamp}.txt`;
+                
                 document.body.appendChild(a);
                 a.click();
                 document.body.removeChild(a);
 
-                logMsg(`✅ Success: ${waypoints.length} waypoints generated and converted to WGS84.`);
+                logMsg(`✅ Success: ${waypoints.length} waypoints generated in OziExplorer text format.`);
+                logMsg(`⚠️ Reminder: In OziExplorer, use "Load" -> "Import Waypoints from Text File"`);
 
             } catch (err) {
                 logMsg(`❌ Critical Error: ${err.message}`);
