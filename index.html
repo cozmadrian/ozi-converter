@@ -213,10 +213,11 @@
                     fullText += content.items.map(item => item.str).join(" ") + " ";
                 }
 
-                logMsg("Searching for tasks and coordinates...");
+                logMsg("Searching for tasks, coordinates, and altitudes...");
                 
                 const taskRegex = /\b(\d{1,2})\s+([A-Z]{3})\b/g;
-                const coordRegex = /\b(\d{4})\/(\d{4})\b/g;
+                // Regex updated to optionally capture altitude (e.g. 539ft)
+                const coordRegex = /\b(\d{4})\/(\d{4})\b(?:\s*(\d+)\s*ft)?/gi;
 
                 let tasksFound = [];
                 let match;
@@ -243,19 +244,22 @@
 
                     const rawE = match[1];
                     const rawN = match[2];
+                    const altitude = match[3] ? `${match[3]}ft` : "";
 
                     const realEasting = `${prefE}${rawE}${suffE}`;
                     const realNorthing = `${prefN}${rawN}${suffN}`;
                     const zoneString = `${zone}${hemi}`; 
 
                     const finalName = `${currentTaskName}_P${wpCounter}`;
+                    const description = altitude ? `${currentTaskName} Alt:${altitude}` : currentTaskName;
                     
-                    waypoints.push(`WP,UTM,${finalName},${zoneString},${realEasting},${realNorthing},,,${currentTaskName}`);
+                    waypoints.push(`WP,UTM,${finalName},${zoneString},${realEasting},${realNorthing},,,${description}`);
                     wpCounter++;
 
                     const [lng, lat] = proj4(proj4UtmDef, 'EPSG:4326', [parseFloat(realEasting), parseFloat(realNorthing)]);
                     
-                    const marker = L.marker([lat, lng]).bindPopup(`<b>${finalName}</b><br>UTM: ${zoneString} ${realEasting} ${realNorthing}`);
+                    const popupText = `<b>${finalName}</b><br>UTM: ${zoneString} ${realEasting} ${realNorthing}` + (altitude ? `<br>Alt: ${altitude}` : "");
+                    const marker = L.marker([lat, lng]).bindPopup(popupText);
                     mapMarkers.push(marker);
                 }
 
