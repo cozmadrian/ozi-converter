@@ -450,6 +450,7 @@
                 document.body.removeChild(a);
 
                 logMsg(`✅ Success: File [tasks_zone${zone}${hemi}_${timestamp}.wpt] generated.`);
+                logMsg(`⚠️ Make sure file name ends in .wpt, if it ends in .wpt.txt RENAME it ⚠️`);
 
             } catch (err) {
                 logMsg(`❌ Critical Error: ${err.message}`);
