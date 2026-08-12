@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+ <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
@@ -9,7 +9,7 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
     <script>pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';</script>
     
-    <!-- Proj4js for Lat/Lon to UTM calculation -->
+    <!-- Proj4js for UTM to Lat/Lon calculation -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/proj4js/2.9.0/proj4.js"></script>
     
     <!-- Leaflet & Geocoder for OpenStreetMap -->
@@ -19,14 +19,14 @@
     <script src="https://unpkg.com/leaflet-control-geocoder/dist/Control.Geocoder.js"></script>
 
     <style>
-        /* Responsive CSS Reset */
         * { box-sizing: border-box; }
         
         body { font-family: Arial, sans-serif; background: #f0f2f5; padding: 10px; color: #333; margin: 0; }
         .container { max-width: 800px; background: white; padding: 25px; border-radius: 8px; margin: 0 auto; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
         #map { height: 400px; width: 100%; border-radius: 8px; margin-bottom: 20px; border: 1px solid #ccc; z-index: 1; }
         
-        /* Default Grid for Desktop/Tablets Landscape */
+        .marker-tooltip { font-weight: bold; text-align: center; background: rgba(255, 255, 255, 0.9); border: 1px solid #333; box-shadow: 0 1px 3px rgba(0,0,0,0.3); border-radius: 4px; padding: 4px; font-size: 12px; }
+
         .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-bottom: 20px; }
         
         .input-group { display: flex; flex-direction: column; width: 100%; }
@@ -39,7 +39,6 @@
         #log { margin-top: 20px; font-size: 13px; color: #555; white-space: pre-wrap; background: #f8f9fa; padding: 10px; border-radius: 4px; border: 1px solid #ddd; word-break: break-all;}
         .instruction { font-size: 14px; color: #555; margin-bottom: 15px; font-style: italic; }
 
-        /* Mobile Breakpoint */
         @media (max-width: 600px) {
             .grid { grid-template-columns: 1fr; gap: 10px; }
             .container { padding: 15px; }
@@ -50,7 +49,7 @@
 </head>
 <body>
     <div class="container">
-        <h2>UTM to OziExplorer Converter</h2>
+        <h2>WatchMeFly to OziExplorer (.wpt)</h2>
         
         <p class="instruction">Step 1: Search for your competition city or click on the map to auto-detect UTM prefixes.</p>
         
@@ -89,7 +88,7 @@
             <input type="file" id="pdfInput" accept="application/pdf">
         </div>
 
-        <button onclick="processFiles()">Generate Text File (.txt)</button>
+        <button onclick="processFiles()">Generate Waypoints (.wpt)</button>
         <div id="log">Waiting for action...</div>
     </div>
 
@@ -101,6 +100,13 @@
             const letters = "CDEFGHJKLMNPQRSTUVWXX";
             const index = Math.floor((lat + 80) / 8);
             return letters.charAt(index);
+        }
+
+        function getOziDate() {
+            const now = new Date();
+            const oziEpoch = new Date(Date.UTC(1899, 11, 30)); 
+            const diff = now - oziEpoch;
+            return (diff / 86400000).toFixed(7);
         }
 
         function highlightInput(id) {
@@ -139,14 +145,14 @@
         }
 
         function initMap() {
-            map = L.map('map').setView([47.2, 15.7], 5); 
+            // Default center adjusted to Slovenia based on context
+            map = L.map('map').setView([46.1, 14.9], 7); 
             
             L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
                 attribution: '© OpenStreetMap contributors',
                 maxZoom: 18
             }).addTo(map);
 
-            // Add the Search Bar (Geocoder)
             const geocoder = L.Control.geocoder({
                 defaultMarkGeocode: false,
                 placeholder: "Search for a city or region..."
@@ -157,7 +163,6 @@
                 calculatePrefixes(lat, lng, `Location found (${e.geocode.name})`);
             }).addTo(map);
 
-            // Keep the map click functionality
             map.on('click', function(e) {
                 calculatePrefixes(e.latlng.lat, e.latlng.lng, "Map clicked");
             });
@@ -216,7 +221,6 @@
                 logMsg("Searching for tasks, coordinates, and altitudes...");
                 
                 const taskRegex = /\b(\d{1,2})\s+([A-Z]{3})\b/g;
-                // Regex updated to optionally capture altitude (e.g. 539ft)
                 const coordRegex = /\b(\d{4})\/(\d{4})\b(?:\s*(\d+)\s*ft)?/gi;
 
                 let tasksFound = [];
@@ -233,6 +237,7 @@
 
                 const isSouth = "CDEFGHJKLM".includes(hemi);
                 const proj4UtmDef = `+proj=utm +zone=${zone} ${isSouth ? '+south ' : ''}+ellps=WGS84 +datum=WGS84 +units=m +no_defs`;
+                const oziDate = getOziDate();
 
                 while ((match = coordRegex.exec(fullText)) !== null) {
                     const coordIndex = match.index;
@@ -244,22 +249,23 @@
 
                     const rawE = match[1];
                     const rawN = match[2];
-                    const altitude = match[3] ? `${match[3]}ft` : "";
+                    const altitude = match[3] ? match[3] : "-777";
 
                     const realEasting = `${prefE}${rawE}${suffE}`;
                     const realNorthing = `${prefN}${rawN}${suffN}`;
-                    const zoneString = `${zone}${hemi}`; 
-
-                    const finalName = `${currentTaskName}_P${wpCounter}`;
-                    const description = altitude ? `${currentTaskName} Alt:${altitude}` : currentTaskName;
                     
-                    waypoints.push(`WP,UTM,${finalName},${zoneString},${realEasting},${realNorthing},,,${description}`);
-                    wpCounter++;
-
                     const [lng, lat] = proj4(proj4UtmDef, 'EPSG:4326', [parseFloat(realEasting), parseFloat(realNorthing)]);
+                    const finalName = `${currentTaskName}_P${wpCounter}`;
                     
-                    const popupText = `<b>${finalName}</b><br>UTM: ${zoneString} ${realEasting} ${realNorthing}` + (altitude ? `<br>Alt: ${altitude}` : "");
-                    const marker = L.marker([lat, lng]).bindPopup(popupText);
+                    // Exact template match with spacing and computed Ozi Date
+                    waypoints.push(`${wpCounter},${finalName}, ${lat.toFixed(6)}, ${lng.toFixed(6)},${oziDate}, 0, 1, 3,               0,   65280,, 0, 0,    0,   ${altitude}, 8, 1,17,0,10.0,2,,,120`);
+                    wpCounter++;
+                    
+                    const tooltipText = match[3] ? `${finalName}<br>Alt: ${altitude}ft` : finalName;
+                    const marker = L.marker([lat, lng])
+                        .bindTooltip(tooltipText, { permanent: true, direction: 'top', className: 'marker-tooltip', offset: [0, -10] })
+                        .bindPopup(`Lat: ${lat.toFixed(6)}<br>Lng: ${lng.toFixed(6)}`);
+                    
                     mapMarkers.push(marker);
                 }
 
@@ -274,10 +280,11 @@
                     logMsg(`🗺️ Map updated: Auto-zoomed to show ${mapMarkers.length} generated targets.`);
                 }
 
-                const header = "DATUM,WGS 84\r\n";
-                const txtContent = header + waypoints.join("\r\n");
+                // Strict Header mimicking the organization template
+                const header = "OziExplorer Waypoint File Version 1.1\r\nWGS 84\r\nReserved 2\r\n";
+                const wptContent = header + waypoints.join("\r\n") + "\r\n";
                 
-                const blob = new Blob([txtContent], { type: 'text/plain' });
+                const blob = new Blob([wptContent], { type: 'text/plain' });
                 const url = URL.createObjectURL(blob);
                 const a = document.createElement('a');
                 a.href = url;
@@ -291,13 +298,12 @@
                 const sec = String(now.getSeconds()).padStart(2, '0');
                 const timestamp = `${yyyy}-${mm}-${dd}_${hh}-${min}-${sec}`;
 
-                a.download = `tasks_zone${zone}${hemi}_${timestamp}.txt`;
+                a.download = `tasks_zone${zone}${hemi}_${timestamp}.wpt`;
                 document.body.appendChild(a);
                 a.click();
                 document.body.removeChild(a);
 
-                logMsg(`✅ Success: File [tasks_zone${zone}${hemi}_${timestamp}.txt] generated.`);
-                logMsg(`⚠️ Reminder: In OziExplorer, use "Load" -> "Import Waypoints from Text File"`);
+                logMsg(`✅ Success: File [tasks_zone${zone}${hemi}_${timestamp}.wpt] generated.`);
 
             } catch (err) {
                 logMsg(`❌ Critical Error: ${err.message}`);
