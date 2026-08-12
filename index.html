@@ -1,9 +1,9 @@
- <!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Waypoint Generator - WatchMeFly</title>
+    <title>Universal Waypoint Generator - WatchMeFly</title>
     
     <!-- PDF Library -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
@@ -36,7 +36,7 @@
         
         button { background: #28a745; color: white; border: none; padding: 15px; font-size: 16px; border-radius: 5px; cursor: pointer; width: 100%; font-weight: bold; margin-top: 10px;}
         button:hover { background: #218838; }
-        #log { margin-top: 20px; font-size: 13px; color: #555; white-space: pre-wrap; background: #f8f9fa; padding: 10px; border-radius: 4px; border: 1px solid #ddd; word-break: break-all;}
+        #log { margin-top: 20px; font-size: 13px; color: #555; white-space: pre-wrap; background: #f8f9fa; padding: 10px; border-radius: 4px; border: 1px solid #ddd; word-break: break-all; max-height: 400px; overflow-y: auto;}
         .instruction { font-size: 14px; color: #555; margin-bottom: 15px; font-style: italic; }
 
         @media (max-width: 600px) {
@@ -49,7 +49,7 @@
 </head>
 <body>
     <div class="container">
-        <h2>WatchMeFly to OziExplorer (.wpt)</h2>
+        <h2>Universal WMF to OziExplorer (.wpt)</h2>
         
         <p class="instruction">Step 1: Search for your competition city or click on the map to auto-detect UTM prefixes.</p>
         
@@ -145,7 +145,6 @@
         }
 
         function initMap() {
-            // Default center adjusted to Slovenia based on context
             map = L.map('map').setView([46.1, 14.9], 7); 
             
             L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
@@ -186,6 +185,8 @@
 
         function logMsg(msg) {
             document.getElementById('log').textContent += msg + "\n";
+            const logBox = document.getElementById('log');
+            logBox.scrollTop = logBox.scrollHeight;
         }
 
         async function processFiles() {
@@ -206,32 +207,149 @@
             const suffN = document.getElementById('suffixN').value;
             
             try {
-                logMsg("Reading PDF...");
+                logMsg("Reading PDF & Extracting 2D Layout...");
                 const file = fileInput.files[0];
                 const arrayBuffer = await file.arrayBuffer();
                 const pdf = await pdfjsLib.getDocument(arrayBuffer).promise;
-                let fullText = "";
+                
+                let textItems = [];
 
                 for (let i = 1; i <= pdf.numPages; i++) {
                     const page = await pdf.getPage(i);
                     const content = await page.getTextContent();
-                    fullText += content.items.map(item => item.str).join(" ") + " ";
+                    content.items.forEach(item => {
+                        if (item.str.trim() !== "") {
+                            textItems.push({
+                                str: item.str,
+                                x: item.transform[4],
+                                y: item.transform[5],
+                                page: i
+                            });
+                        }
+                    });
                 }
 
-                logMsg("Searching for tasks, coordinates, and altitudes...");
+                // Y-Tolerance increased to 10 to merge broken lines effectively
+                textItems.sort((a, b) => {
+                    if (a.page !== b.page) return a.page - b.page;
+                    if (Math.abs(a.y - b.y) > 10) return b.y - a.y; 
+                    return a.x - b.x;
+                });
+
+                let fullText = "";
+                let charToItem = [];
+                for (let i = 0; i < textItems.length; i++) {
+                    let str = textItems[i].str + " ";
+                    for(let j = 0; j < str.length; j++) {
+                        charToItem.push(textItems[i]);
+                    }
+                    fullText += str;
+                }
+
+                logMsg("Building Spatial Task Index...");
                 
-                const taskRegex = /\b(\d{1,2})\s+([A-Z]{3})\b/g;
-                const coordRegex = /\b(\d{4})\/(\d{4})\b(?:\s*(\d+)\s*ft)?/gi;
+                const ruleMap = {
+                    "15.1": "PDG", "15.2": "JDG", "15.3": "HWZ", "15.4": "FIN",
+                    "15.5": "FON", "15.6": "HNH", "15.7": "WSD", "15.8": "GBM",
+                    "15.9": "CRT", "15.10": "ELR", "15.11": "BJD", "15.12": "LRM",
+                    "15.13": "MIN", "15.14": "SFL", "15.15": "MDD", "15.16": "XDD",
+                    "15.17": "RTA", "15.18": "3DT", "15.19": "ANG", "15.20": "3DC",
+                    "15.21": "ALT", "15.22": "HRC"
+                };
 
                 let tasksFound = [];
                 let match;
-                while ((match = taskRegex.exec(fullText)) !== null) {
-                    tasksFound.push({ name: `${match[1]}_${match[2]}`, index: match.index });
+
+                const regexTaskText = /(?:TASK\s*DATA|DONN(?:É|E)ES\s+D['’]?(?:E|É)PREUVE|TASK|AUFGABE|ZADATAK|NALOGA|ÉPREUVE|EPREUVE)\s*(?:NR\.?|NO\.?)?\s*(\d{1,2})/gi;
+                
+                const taskKeywords = [...fullText.matchAll(regexTaskText)];
+                for (let keywordMatch of taskKeywords) {
+                    let taskNum = keywordMatch[1].padStart(2, '0');
+                    let anchorItem = charToItem[keywordMatch.index];
+                    
+                    let validItems = textItems.filter(item => 
+                        item.page === anchorItem.page &&
+                        item.y <= anchorItem.y + 15 && 
+                        item.y >= anchorItem.y - 300 && 
+                        Math.abs(item.x - anchorItem.x) < 350
+                    );
+                    
+                    validItems.sort((a, b) => {
+                        if (Math.abs(a.y - b.y) > 10) return b.y - a.y;
+                        return a.x - b.x;
+                    });
+                    
+                    let chunk = validItems.map(i => i.str).join(" ").toUpperCase();
+                    let type = "TGT"; 
+                    
+                    let ruleMatch = chunk.match(/\bR?15\.([1-9]|1\d|2[0-2])\b/);
+                    let acrMatch = chunk.match(/\b(PDG|JDG|HWZ|NDG|FON|HNH|WSD|MDD|XDD|CRT|ELR|LRM|SFL|3DT|BJD|RTA|FIN|MIN|MAX|FLY|GLD|CRZ|GBM|ANG)\b/);
+                    
+                    if (ruleMatch && ruleMap[`15.${ruleMatch[1]}`]) {
+                        type = ruleMap[`15.${ruleMatch[1]}`];
+                    } else if (acrMatch) {
+                        type = acrMatch[1];
+                    } else {
+                        if (chunk.includes("PILOT DECLARED")) type = "PDG";
+                        else if (chunk.includes("JUDGE DECLARED")) type = "JDG";
+                        else if (chunk.includes("HESITATION") || chunk.includes("VALSE")) type = "HWZ";
+                        else if (chunk.includes("FLY IN") || chunk.includes("FLY-IN")) type = "FIN";
+                        else if (chunk.includes("MAXIMUM")) type = "XDD";
+                        else if (chunk.includes("MINIMUM") || chunk.includes("COURTE DISTANCE")) type = "MDD";
+                        else if (chunk.includes("SHORTEST FLIGHT")) type = "SFL";
+                        else if (chunk.includes("3D SHAPE") || chunk.includes("PROFIL")) type = "3DT";
+                        else if (chunk.includes("FLY ON") || chunk.includes("FLY-ON") || chunk.includes("BON CHOIX")) type = "FON";
+                        else if (chunk.includes("HARE AND HOUNDS")) type = "HNH";
+                        else if (chunk.includes("GORDON BENNETT")) type = "GBM";
+                        else if (chunk.includes("CALCULATED RATE")) type = "CRT";
+                        else if (chunk.includes("LAND RUN") || chunk.includes("TRIANGLE")) type = "LRM"; 
+                    }
+                    
+                    tasksFound.push({
+                        name: `T${taskNum}_${type}`,
+                        page: anchorItem.page,
+                        x: anchorItem.x,
+                        y: anchorItem.y,
+                        index: keywordMatch.index
+                    });
                 }
+
+                // Strictly uppercase regex to prevent matching lowercase words like "10 min"
+                const regexTaskShort = /\b(\d{1,2})\s+(PDG|JDG|HWZ|NDG|FON|HNH|WSD|MDD|XDD|CRT|ELR|LRM|SFL|3DT|BJD|RTA|FIN|MIN|MAX|FLY|GLD|CRZ|GBM|ANG)\b/g;
+                while ((match = regexTaskShort.exec(fullText)) !== null) {
+                    let taskNum = match[1].padStart(2, '0');
+                    let type = match[2];
+                    let anchorItem = charToItem[match.index];
+                    tasksFound.push({
+                        name: `T${taskNum}_${type}`,
+                        page: anchorItem.page,
+                        x: anchorItem.x,
+                        y: anchorItem.y,
+                        index: match.index
+                    });
+                }
+
+                tasksFound.sort((a, b) => a.index - b.index);
+
+                let uniqueTasks = [];
+                for (let t of tasksFound) {
+                    if (uniqueTasks.length > 0 && t.name === uniqueTasks[uniqueTasks.length - 1].name) {
+                        continue; 
+                    }
+                    uniqueTasks.push(t);
+                    logMsg(`📌 Tâche détectée: ${t.name} (Page ${t.page}, X: ${Math.round(t.x)}, Y: ${Math.round(t.y)})`);
+                }
+
+                logMsg("----------------------------------------");
+                logMsg("Extrayant toutes les coordonnées physiques...");
+                
+                // Space-tolerant regex: Ignores spaces inside the 4-digit blocks, accepts any standard separator
+                const coordRegex = /(?:^|[^0-9])((?:\d\s*){4,5})[/\\|.\-–—_,:;]((?:\s*\d){4,5})(?![0-9])/g;
 
                 let waypoints = [];
                 let mapMarkers = [];
-                let wpCounter = 1;
+                let globalWpCounter = 1;
+                let taskLocalCounters = {}; 
                 
                 if (waypointsLayer) map.removeLayer(waypointsLayer);
 
@@ -240,37 +358,66 @@
                 const oziDate = getOziDate();
 
                 while ((match = coordRegex.exec(fullText)) !== null) {
-                    const coordIndex = match.index;
+                    let cItem = charToItem[match.index];
+                    let cPage = cItem.page;
+                    let cX = Math.round(cItem.x);
+                    let cY = Math.round(cItem.y);
                     
-                    let currentTaskName = "Target";
-                    let bestTask = tasksFound.reverse().find(t => t.index < coordIndex);
-                    if (bestTask) currentTaskName = bestTask.name;
-                    tasksFound.reverse(); 
+                    let bestTask = null;
+                    
+                    // 1st pass: Look for task header ABOVE coordinate, SAME PAGE, STRICTLY SAME COLUMN (150px)
+                    let validTasks = uniqueTasks.filter(t => t.page === cPage && t.y >= cY - 15 && Math.abs(t.x - cX) < 150);
+                    
+                    // 2nd pass: If no task in strict column, broaden to wide-page search (400px)
+                    if (validTasks.length === 0) {
+                        validTasks = uniqueTasks.filter(t => t.page === cPage && t.y >= cY - 15 && Math.abs(t.x - cX) < 400);
+                    }
+                    
+                    if (validTasks.length > 0) {
+                        validTasks.sort((a, b) => a.y - b.y); 
+                        bestTask = validTasks[0];
+                    } else {
+                        bestTask = [...uniqueTasks].reverse().find(t => t.index < match.index);
+                    }
 
-                    const rawE = match[1];
-                    const rawN = match[2];
-                    const altitude = match[3] ? match[3] : "-777";
+                    let currentTaskName = bestTask ? bestTask.name : "T00_TGT";
+
+                    if (!taskLocalCounters[currentTaskName]) taskLocalCounters[currentTaskName] = 1;
+                    let localPointCounter = taskLocalCounters[currentTaskName];
+                    taskLocalCounters[currentTaskName]++;
+
+                    // Clean spaces injected by PDF.js out of the digit matches
+                    const rawE = match[1].replace(/\s/g, '');
+                    const rawN = match[2].replace(/\s/g, '');
+                    
+                    let textAfter = fullText.substring(match.index, match.index + 80);
+                    let altMatch = textAfter.match(/(\d+)\s*(?:FT|FEET|PIEDS)/i);
+                    const altitude = altMatch ? altMatch[1] : "-777"; 
+
+                    logMsg(`🔍 Cible lue: [${rawE}/${rawN}] sur Page ${cPage} (Pos: X=${cX}, Y=${cY})`);
+                    logMsg(`   ↳ Affectée à: ${currentTaskName}_P${localPointCounter} (Altitude: ${altitude !== "-777" ? altitude+"ft" : "Aucune"})`);
 
                     const realEasting = `${prefE}${rawE}${suffE}`;
                     const realNorthing = `${prefN}${rawN}${suffN}`;
                     
                     const [lng, lat] = proj4(proj4UtmDef, 'EPSG:4326', [parseFloat(realEasting), parseFloat(realNorthing)]);
-                    const finalName = `${currentTaskName}_P${wpCounter}`;
                     
-                    // Exact template match with spacing and computed Ozi Date
-                    waypoints.push(`${wpCounter},${finalName}, ${lat.toFixed(6)}, ${lng.toFixed(6)},${oziDate}, 0, 1, 3,               0,   65280,, 0, 0,    0,   ${altitude}, 8, 1,17,0,10.0,2,,,120`);
-                    wpCounter++;
+                    const finalName = `${currentTaskName}_P${localPointCounter}`;
                     
-                    const tooltipText = match[3] ? `${finalName}<br>Alt: ${altitude}ft` : finalName;
+                    waypoints.push(`${globalWpCounter},${finalName}, ${lat.toFixed(6)}, ${lng.toFixed(6)},${oziDate}, 0, 1, 3,               0,   65280,, 0, 0,    0,   ${altitude}, 8, 1,17,0,10.0,2,,,120`);
+                    globalWpCounter++;
+                    
+                    const tooltipText = altitude !== "-777" ? `${finalName}<br>Alt: ${altitude}ft` : finalName;
                     const marker = L.marker([lat, lng])
                         .bindTooltip(tooltipText, { permanent: true, direction: 'top', className: 'marker-tooltip', offset: [0, -10] })
                         .bindPopup(`Lat: ${lat.toFixed(6)}<br>Lng: ${lng.toFixed(6)}`);
                     
                     mapMarkers.push(marker);
                 }
+                logMsg("----------------------------------------");
 
                 if (waypoints.length === 0) {
-                    logMsg("❌ Error: No XXXX/YYYY coordinates found in this document.");
+                    logMsg("❌ Error: No XXXX/YYYY or XXXX-YYYY coordinates found in this document.");
                     return;
                 }
 
@@ -280,7 +427,6 @@
                     logMsg(`🗺️ Map updated: Auto-zoomed to show ${mapMarkers.length} generated targets.`);
                 }
 
-                // Strict Header mimicking the organization template
                 const header = "OziExplorer Waypoint File Version 1.1\r\nWGS 84\r\nReserved 2\r\n";
                 const wptContent = header + waypoints.join("\r\n") + "\r\n";
                 
