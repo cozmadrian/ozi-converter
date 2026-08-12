@@ -427,7 +427,7 @@
                     logMsg(`🗺️ Map updated: Auto-zoomed to show ${mapMarkers.length} generated targets.`);
                 }
 
-                const header = "OziExplorer Waypoint File Version 1.1\r\nWGS 84\r\nReserved 2\r\n";
+                const header = "OziExplorer Waypoint File Version 1.1\r\nWGS 84\r\nReserved 2\r\r\n";
                 const wptContent = header + waypoints.join("\r\n") + "\r\n";
                 
                 const blob = new Blob([wptContent], { type: 'text/plain' });
