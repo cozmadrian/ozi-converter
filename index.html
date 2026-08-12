@@ -337,11 +337,11 @@
                         continue; 
                     }
                     uniqueTasks.push(t);
-                    logMsg(`📌 Tâche détectée: ${t.name} (Page ${t.page}, X: ${Math.round(t.x)}, Y: ${Math.round(t.y)})`);
+                    logMsg(`📌 Task detected: ${t.name} (Page ${t.page}, X: ${Math.round(t.x)}, Y: ${Math.round(t.y)})`);
                 }
 
                 logMsg("----------------------------------------");
-                logMsg("Extrayant toutes les coordonnées physiques...");
+                logMsg("Extracting all physical coordinates...");
                 
                 // Space-tolerant regex: Ignores spaces inside the 4-digit blocks, accepts any standard separator
                 const coordRegex = /(?:^|[^0-9])((?:\d\s*){4,5})[/\\|.\-–—_,:;]((?:\s*\d){4,5})(?![0-9])/g;
@@ -394,8 +394,8 @@
                     let altMatch = textAfter.match(/(\d+)\s*(?:FT|FEET|PIEDS)/i);
                     const altitude = altMatch ? altMatch[1] : "-777"; 
 
-                    logMsg(`🔍 Cible lue: [${rawE}/${rawN}] sur Page ${cPage} (Pos: X=${cX}, Y=${cY})`);
-                    logMsg(`   ↳ Affectée à: ${currentTaskName}_P${localPointCounter} (Altitude: ${altitude !== "-777" ? altitude+"ft" : "Aucune"})`);
+                    logMsg(`🔍 Target read: [${rawE}/${rawN}] on Page ${cPage} (Pos: X=${cX}, Y=${cY})`);
+                    logMsg(`   ↳ Assigned to: ${currentTaskName}_P${localPointCounter} (Altitude: ${altitude !== "-777" ? altitude+"ft" : "None"})`);
 
                     const realEasting = `${prefE}${rawE}${suffE}`;
                     const realNorthing = `${prefN}${rawN}${suffN}`;
@@ -430,7 +430,7 @@
                 const header = "OziExplorer Waypoint File Version 1.1\r\nWGS 84\r\nReserved 2\r\n\r\n";
                 const wptContent = header + waypoints.join("\r\n") + "\r\n";
                 
-                const blob = new Blob([wptContent], { type: 'text/plain' });
+                const blob = new Blob([wptContent], { type: 'application/octet-stream' });
                 const url = URL.createObjectURL(blob);
                 const a = document.createElement('a');
                 a.href = url;
